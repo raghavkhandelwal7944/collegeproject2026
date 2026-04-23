@@ -1,0 +1,70 @@
+@import "tailwindcss";
+
+@theme {
+  /* ── Palette tokens ────────────────────────── */
+  --color-safe:          #10b981;   /* emerald-500  — cleared  */
+  --color-safe-dim:      #065f46;   /* emerald-900  — bg tint  */
+  --color-safe-bright:   #34d399;   /* emerald-400  — glow     */
+
+  --color-warn:          #d97706;   /* amber-600    — redacted */
+  --color-warn-dim:      #78350f;   /* amber-900    — bg tint  */
+  --color-warn-bright:   #fbbf24;   /* amber-400    */
+
+  --color-danger:        #ef4444;   /* red-500      — blocked  */
+  --color-danger-dim:    #7f1d1d;   /* red-900      */
+
+  --color-gold:          #fcd34d;   /* yellow-300   — vault    */
+  --color-gold-dim:      #451a03;   /* amber-950    */
+
+  --color-surface-0:     #09090b;   /* zinc-950     — canvas   */
+  --color-surface-1:     #18181b;   /* zinc-900     — widget   */
+  --color-surface-2:     #27272a;   /* zinc-800     — border   */
+  --color-surface-3:     #3f3f46;   /* zinc-700     — muted    */
+
+  --color-text-primary:  #fafafa;
+  --color-text-secondary: #a1a1aa;
+  --color-text-muted:    #71717a;
+}
+
+/* ── Base ──────────────────────────────────── */
+*,
+*::before,
+*::after { box-sizing: border-box; }
+
+html, body {
+  height: 100%;
+  background-color: #09090b;
+  color: #fafafa;
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* ── Scrollbar ─────────────────────────────── */
+.scrollbar-thin::-webkit-scrollbar      { width: 3px; }
+.scrollbar-thin::-webkit-scrollbar-track { background: transparent; }
+.scrollbar-thin::-webkit-scrollbar-thumb {
+  background: #3f3f46;
+  border-radius: 2px;
+}
+.scrollbar-thin::-webkit-scrollbar-thumb:hover { background: #52525b; }
+
+/* ── Light mode overrides ──────────────────── */
+html.light,
+html.light body {
+  background-color: #f4f4f5;
+  color: #18181b;
+}
+
+html.light .bg-zinc-950 { background-color: #f4f4f5 !important; }
+html.light .bg-zinc-900 { background-color: #e4e4e7 !important; }
+html.light .bg-zinc-800 { background-color: #d4d4d8 !important; }
+html.light .border-zinc-800 { border-color: #d4d4d8 !important; }
+html.light .border-zinc-700 { border-color: #a1a1aa !important; }
+html.light .text-zinc-100 { color: #18181b !important; }
+html.light .text-zinc-200 { color: #27272a !important; }
+html.light .text-zinc-400 { color: #52525b !important; }
+html.light .text-zinc-500 { color: #71717a !important; }
+html.light .text-zinc-600 { color: #a1a1aa !important; }
+html.light .placeholder-zinc-600::placeholder { color: #a1a1aa !important; }
+
