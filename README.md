@@ -179,7 +179,7 @@ Full project report and poster are available in the `docs/` folder:
 
 **Raghav Khandelwal** — 22BCE3356  
 VIT Vellore | Winter Semester 2025–26  
-Guide: Prof. Swarnalatha P (Employee ID: 10321)
+Guide: Prof. Swarnalatha P 
 
 ---
 
