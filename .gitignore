@@ -1,0 +1,107 @@
+# ============================================================
+# SECRETS & CREDENTIALS — never commit these
+# ============================================================
+.env
+.env.*
+*.env
+!.env.example
+
+# ============================================================
+# PYTHON
+# ============================================================
+# Virtual environment
+venv/
+.venv/
+env/
+ENV/
+
+# Bytecode & cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+*.egg
+.eggs/
+wheels/
+
+# Testing / coverage
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+.tox/
+
+# MyPy / Pyright type stubs cache
+.mypy_cache/
+.dmypy.json
+.pyright/
+
+# ============================================================
+# NODE / REACT / NEXT.JS (frontend-react/)
+# ============================================================
+node_modules/
+.pnp
+.pnp.js
+
+# Next.js build output
+frontend-react/.next/
+frontend-react/out/
+frontend-react/dist/
+
+# Vercel
+.vercel/
+
+# ESLint cache
+.eslintcache
+
+# Misc JS
+*.tsbuildinfo
+next-env.d.ts
+
+# ============================================================
+# DATABASES & DATA FILES
+# ============================================================
+*.sqlite3
+*.db
+*.dump
+*.sql.gz
+
+# ============================================================
+# LOGS
+# ============================================================
+*.log
+logs/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# ============================================================
+# OS FILES
+# ============================================================
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ============================================================
+# EDITOR / IDE
+# ============================================================
+.vscode/settings.json
+.idea/
+*.suo
+*.user
+*.swp
+*~
+
+# ============================================================
+# MISC
+# ============================================================
+*.bak
+*.tmp
+*.orig
+write_poster.py
+make_vit_poster.py

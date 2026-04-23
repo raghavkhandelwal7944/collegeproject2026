@@ -1,0 +1,31 @@
+fastapi
+uvicorn
+streamlit
+httpx
+requests
+pytest
+pandas
+altair
+passlib
+bcrypt==3.2.2
+python-jose[cryptography]
+python-multipart
+mysql-connector-python
+python-dotenv
+pymongo
+google-generativeai
+
+# Phase 1 — Layer 1 Presidio PII scanning
+presidio-analyzer
+presidio-anonymizer
+# spaCy NLP backend for Presidio entity recognition.
+# After installing, run: python -m spacy download en_core_web_lg
+spacy
+
+# Phase 2 — configuration management
+pydantic-settings
+
+# Phase 3 — Token Vault + Semantic Cache
+redis[asyncio]
+sentence-transformers
+numpy
