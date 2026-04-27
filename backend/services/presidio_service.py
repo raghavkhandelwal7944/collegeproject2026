@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import re
 import time
 from dataclasses import dataclass, field
 
@@ -47,6 +48,12 @@ _TARGET_ENTITIES: list[str] = [
     "CREDIT_CARD",
 ]
 
+_SELF_NAME_RE = re.compile(
+    r"\bmy\s+name\s+is\s+([a-z][a-z'\-]*(?:\s+[a-z][a-z'\-]*){0,3})\b",
+    re.IGNORECASE,
+)
+_CARD_RE = re.compile(r"\b(?:\d[ -]?){13,19}\b")
+
 
 def _make_token(entity_type: str, original_text: str) -> str:
     """
@@ -64,6 +71,69 @@ def _make_token(entity_type: str, original_text: str) -> str:
     """
     short_hash = hashlib.sha256(original_text.encode()).hexdigest()[:6]
     return f"<{entity_type}_{short_hash}>"
+
+
+def _normalize_card_digits(text: str) -> str:
+    return re.sub(r"\D", "", text)
+
+
+def _looks_like_payment_card(text: str) -> bool:
+    digits = _normalize_card_digits(text)
+    if len(digits) < 13 or len(digits) > 19:
+        return False
+    if len(set(digits)) == 1:
+        return False
+
+    total = 0
+    reverse_digits = digits[::-1]
+    for idx, ch in enumerate(reverse_digits):
+        n = int(ch)
+        if idx % 2 == 1:
+            n *= 2
+            if n > 9:
+                n -= 9
+        total += n
+    return total % 10 == 0
+
+
+def _overlaps(existing: list[RecognizerResult], start: int, end: int) -> bool:
+    return any(start < item.end and end > item.start for item in existing)
+
+
+def _build_fallback_results(prompt: str, existing: list[RecognizerResult]) -> list[RecognizerResult]:
+    """Add regex-based fallback detections for aggressive PII mode only."""
+    extra: list[RecognizerResult] = []
+
+    for match in _SELF_NAME_RE.finditer(prompt):
+        start, end = match.span(1)
+        if _overlaps(existing + extra, start, end):
+            continue
+        extra.append(
+            RecognizerResult(
+                entity_type="PERSON",
+                start=start,
+                end=end,
+                score=0.7,
+            )
+        )
+
+    for match in _CARD_RE.finditer(prompt):
+        candidate = match.group(0)
+        if not _looks_like_payment_card(candidate):
+            continue
+        start, end = match.span(0)
+        if _overlaps(existing + extra, start, end):
+            continue
+        extra.append(
+            RecognizerResult(
+                entity_type="CREDIT_CARD",
+                start=start,
+                end=end,
+                score=0.85,
+            )
+        )
+
+    return extra
 
 
 @dataclass
@@ -136,7 +206,7 @@ class PresidioService:
     # Public API
     # ------------------------------------------------------------------
 
-    def scan(self, prompt: str) -> ScanResult:
+    def scan(self, prompt: str, aggressive: bool = False) -> ScanResult:
         """
         Run the full Layer 1 Presidio pipeline on a raw prompt.
 
@@ -150,6 +220,8 @@ class PresidioService:
 
         Args:
             prompt: The raw user prompt string.
+            aggressive: When True, adds regex-based fallback detections for
+                        lowercase self-introduced names and payment card numbers.
 
         Returns:
             ScanResult with the anonymized text, entity list, and timing.
@@ -166,6 +238,11 @@ class PresidioService:
             entities=_TARGET_ENTITIES,
             language="en",
         )
+
+        if aggressive:
+            analyzer_results.extend(_build_fallback_results(prompt, analyzer_results))
+
+        analyzer_results.sort(key=lambda item: (item.start, item.end, item.entity_type))
 
         if not analyzer_results:
             duration_ms = (time.perf_counter() - scan_start) * 1000
@@ -204,7 +281,7 @@ class PresidioService:
         # Build operator configs: one per entity type, lambda returns the precomputed token.
         # Because Presidio calls the lambda with the detected text as its argument,
         # we compute the token from that text directly — no closure-capture issues.
-        for entity_type in _TARGET_ENTITIES:
+        for entity_type in {r.entity_type for r in analyzer_results}:
             operators[entity_type] = OperatorConfig(
                 "custom",
                 {

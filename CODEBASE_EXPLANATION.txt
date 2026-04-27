@@ -1,0 +1,1611 @@
+FIREWALL LLM CODEBASE EXPLANATION
+=================================
+
+Purpose of this file
+--------------------
+This document explains the main logic of the entire codebase in plain English.
+It focuses on:
+1. What each major backend and frontend file does
+2. The main Python, TypeScript, and React functions/components used
+3. The full request workflow from login to chat response
+4. How each security policy works
+5. How chat history works across MongoDB and the React UI
+6. How MySQL, MongoDB, Redis, FastAPI, Next.js, and React work together
+
+
+============================================================
+1. HIGH-LEVEL IDEA OF THE PROJECT
+============================================================
+
+This project is a secure AI chat application.
+
+The main idea is:
+- A user logs into a web dashboard
+- The user sends prompts through a chat interface
+- Before the prompt reaches the main language model, it passes through a firewall pipeline
+- That pipeline can:
+  - detect prompt injection or jailbreak attempts
+  - detect and redact PII
+  - store token mappings in Redis
+  - check semantic cache in Redis
+  - block dangerous code-style prompts
+  - send only safe prompts to the main model
+  - restore redacted data in the final answer when allowed
+- The app also stores:
+  - audit logs in MySQL
+  - conversation history in MongoDB
+  - temporary token vault and semantic cache in Redis
+
+So this is not just a chatbot.
+It is a chatbot + AI firewall + audit layer + policy engine.
+
+
+============================================================
+2. TECH STACK AND WHY EACH PART EXISTS
+============================================================
+
+Backend
+-------
+Framework: FastAPI
+Language: Python
+Main role:
+- authentication token generation
+- firewall checks
+- PII scanning
+- LLM calls
+- data persistence
+- policy enforcement
+
+Frontend
+--------
+Framework: Next.js with React
+Language: TypeScript
+Main role:
+- login/signup pages
+- dashboard pages
+- chat UI
+- policy toggle UI
+- live traffic page
+- safe proxy layer between browser and FastAPI backend
+
+Databases and services
+----------------------
+1. MySQL
+   Used for:
+   - users table
+   - audit logs
+   - user policy flags
+
+2. MongoDB
+   Used for:
+   - chat conversations
+   - session-based history
+   - restoring old chats by session
+
+3. Redis
+   Used for:
+   - token vault (maps anonymized tokens back to original PII)
+   - semantic cache for similar prompts and cached responses
+
+4. Inference server
+   Used for:
+   - gatekeeper model
+   - main LLM model
+   The code calls an OpenAI-compatible /chat/completions endpoint.
+
+5. Gemini
+   Used in backend/firewall.py for prompt injection / jailbreak detection.
+
+
+============================================================
+3. TOP-LEVEL PROJECT FLOW
+============================================================
+
+End-to-end user flow:
+1. User signs up or logs in from the Next.js frontend
+2. Next.js auth route talks to FastAPI backend
+3. Backend returns JWT token
+4. Next.js stores JWT inside an httpOnly cookie named token
+5. Protected frontend pages are allowed only if token cookie exists
+6. User opens Playground page and sends a prompt
+7. Frontend sends prompt to /api/proxy/api/v1/chat
+8. Next.js proxy route forwards request to FastAPI backend with Authorization: Bearer <token>
+9. FastAPI chat router runs firewall pipeline
+10. If safe, main LLM responds
+11. Backend stores conversation and logs
+12. Frontend displays final response
+
+
+============================================================
+4. BACKEND FILE-BY-FILE EXPLANATION
+============================================================
+
+------------------------------------------------------------
+4.1 backend/main.py
+------------------------------------------------------------
+
+This is the backend entry point.
+It creates the FastAPI app and wires everything together.
+
+Main responsibilities:
+- initialize databases on startup
+- warm up shared services
+- connect to Redis
+- expose auth endpoints
+- expose stats/history/session endpoints
+- register chat and policies routers
+
+Main functions/classes in this file
+-----------------------------------
+1. lifespan(app)
+   This is the startup/shutdown manager.
+   On startup it:
+   - calls init_db() to create MySQL tables
+   - creates PresidioService and registers it globally
+   - creates shared httpx.AsyncClient
+   - creates LLMService with shared HTTP client
+   - creates EmbeddingService
+   - connects to Redis and creates RedisService
+
+   On shutdown it:
+   - closes HTTP client
+   - closes Redis connection
+
+   Why important:
+   - heavy services load only once
+   - connection pools are reused across requests
+   - app startup is centralized
+
+2. UserCreate(BaseModel)
+   Pydantic model for registration input.
+
+3. register(user)
+   FastAPI POST /register endpoint.
+   - hashes password
+   - creates user in MySQL
+
+4. login_for_access_token(form_data)
+   FastAPI POST /token endpoint.
+   - verifies username/password
+   - creates JWT token
+   - returns token as JSON
+
+5. health_redis()
+   FastAPI GET /health/redis endpoint.
+   - checks whether Redis can write/read/delete a test key
+
+6. activity_logs()
+   Returns recent MySQL logs.
+
+7. stats()
+   Returns total requests and block counts.
+
+8. history()
+   Returns user conversation history from MongoDB.
+
+9. chat_sessions()
+   Returns session summaries from MongoDB.
+
+10. session_history(session_id)
+    Returns all messages for one chat session.
+
+
+------------------------------------------------------------
+4.2 backend/database.py
+------------------------------------------------------------
+
+This is the persistence layer.
+It handles MySQL and MongoDB operations.
+
+Data split by storage type
+--------------------------
+MySQL stores:
+- users
+- logs
+- user_policies
+
+MongoDB stores:
+- conversations
+- session-based message turns
+
+Main functions
+--------------
+1. get_mongo_connection()
+   Creates MongoDB connection and returns the DB object.
+
+2. generate_session_title(user_message)
+   Uses Gemini to produce a short title for a new chat session.
+   If Gemini fails, it falls back to the first 40 chars of the first message.
+
+3. save_conversation(username, user_message, bot_response, session_id, session_title)
+   Saves one full conversation turn to MongoDB.
+   Stored fields:
+   - username
+   - user_message
+   - bot_response
+   - session_id
+   - session_title
+   - timestamp
+
+4. get_user_conversations(username, limit=50)
+   Returns recent conversations for a user.
+
+5. list_user_sessions(username)
+   Important for chat history.
+   Uses Mongo aggregation to group messages by session_id.
+   Returns:
+   - session_id
+   - title
+   - last_message timestamp
+   - message_count
+
+6. get_session_messages(username, session_id)
+   Important for restoring old chats.
+   Reads one session from MongoDB and converts stored turns into:
+   - {role: 'user', content: ...}
+   - {role: 'assistant', content: ...}
+   sorted oldest-first
+
+7. get_db_connection()
+   Returns MySQL connection.
+   If DB does not exist, it tries to create it.
+
+8. create_database()
+   Creates the MySQL database if missing.
+
+9. init_db()
+   Creates the MySQL tables if missing:
+   - logs
+   - users
+   - user_policies
+   Also migrates missing user columns.
+
+10. get_user_policies(username)
+    Reads user policy flags from MySQL.
+    If no row exists, creates default row:
+    - aggressive_pii = False
+    - semantic_cache = True
+    - code_block = False
+
+11. set_user_policies(username, aggressive_pii, semantic_cache, code_block)
+    Upserts policy settings for a user.
+
+12. get_conversation_history(username, limit=20, session_id=None)
+    Very important for chat memory.
+    Reads MongoDB conversations and returns model-ready context.
+    If session_id is provided, history is scoped only to that session.
+    This is what fixed context bleed between old and new chats.
+
+13. create_user(username, hashed_password, ...)
+    Inserts user into MySQL.
+
+14. get_user(username)
+    Reads user row for authentication.
+
+15. log_request(user_input, blocked, violation_type)
+    Stores audit trail in MySQL logs table.
+
+16. get_recent_logs(limit=20)
+    Returns latest audit logs.
+
+17. get_stats()
+    Computes:
+    - total requests
+    - total blocked
+    - percentage blocked
+
+
+------------------------------------------------------------
+4.3 backend/dependencies.py
+------------------------------------------------------------
+
+This file holds reusable auth helpers.
+
+Main functions
+--------------
+1. verify_password(plain_password, hashed_password)
+   Verifies bcrypt password.
+
+2. get_password_hash(password)
+   Hashes password with bcrypt.
+   Also enforces bcrypt 72-byte length limit.
+
+3. create_access_token(data, expires_delta=None)
+   Creates JWT token.
+   Stores username in sub claim and expiry in exp.
+
+4. get_current_user(token=Depends(...))
+   Main auth dependency.
+   - decodes JWT
+   - extracts username
+   - loads user from MySQL
+   - raises 401 if invalid
+
+This function protects most backend endpoints.
+
+
+------------------------------------------------------------
+4.4 backend/models/schemas.py
+------------------------------------------------------------
+
+This file defines the API contract using Pydantic.
+
+Main models
+-----------
+1. HistoryMessage
+   A prior chat message with role and content.
+
+2. ChatRequest
+   Input to /api/v1/chat
+   Fields:
+   - prompt
+   - messages (frontend-provided temporary history)
+   - chat_session_id
+
+3. AnonymizedEntity
+   One detected PII entity.
+   Fields include:
+   - original_text
+   - token
+   - entity_type
+   - start, end
+   - score
+
+4. ChatResponse
+   Output from /api/v1/chat
+   Fields include:
+   - anonymized_prompt
+   - entities_found
+   - pii_detected
+   - scan_duration_ms
+   - gatekeeper_verdict
+   - llm_response
+   - final_response
+   - cache_hit
+
+This response shape is what the React Playground uses.
+
+
+------------------------------------------------------------
+4.5 backend/firewall.py
+------------------------------------------------------------
+
+This file is the Layer 0 firewall logic.
+It handles prompt injection detection with Gemini.
+
+Main functions
+--------------
+1. detect_injection(prompt)
+   Sends the prompt to Gemini with a system instruction that says:
+   - respond TRUE if malicious
+   - respond FALSE if safe
+
+   It looks for:
+   - prompt injection
+   - jailbreak language
+   - harmful/illegal content
+
+   Returns:
+   - True if malicious
+   - False if safe or if Gemini is unavailable
+
+2. redact_pii(prompt)
+   Older regex-based PII redaction helper.
+   It redacts emails, phones, and some API keys.
+   This is not the main PII pipeline anymore; PresidioService is the primary one.
+
+
+------------------------------------------------------------
+4.6 backend/services/presidio_service.py
+------------------------------------------------------------
+
+This is Layer 1: PII detection and anonymization.
+
+Main purpose
+------------
+It scans a prompt for sensitive entities and replaces them with deterministic tokens.
+Example:
+- "John Smith" -> <PERSON_a3f2c1>
+
+Main constants/helpers
+----------------------
+1. _TARGET_ENTITIES
+   The entity types currently scanned:
+   - PERSON
+   - EMAIL_ADDRESS
+   - PHONE_NUMBER
+   - CREDIT_CARD
+
+2. _SELF_NAME_RE
+   Regex fallback for lower-case self-introduction phrases like:
+   - "my name is raghav"
+
+3. _CARD_RE
+   Regex fallback for potential payment card strings.
+
+4. _make_token(entity_type, original_text)
+   Creates deterministic token using SHA-256 hash prefix.
+   Same input -> same token.
+
+5. _looks_like_payment_card(text)
+   Uses Luhn algorithm to validate card-like strings.
+
+6. _build_fallback_results(prompt, existing)
+   Adds extra detections only in aggressive mode.
+   This was added so lower-case names and some card numbers are still caught.
+
+Main class
+----------
+PresidioService
+
+Important methods
+-----------------
+1. __init__()
+   Registers lazy service; does not fully load heavy NLP immediately.
+
+2. _ensure_loaded()
+   Loads AnalyzerEngine and AnonymizerEngine on first real use.
+
+3. scan(prompt, aggressive=False)
+   This is the main PII scan function.
+
+   Workflow inside scan():
+   a. Presidio Analyzer finds entities
+   b. If aggressive=True, regex fallback results are added
+   c. Results are sorted
+   d. If nothing found, return original prompt
+   e. Build token map for each span
+   f. Configure anonymizer operators
+   g. Replace spans with tokens
+   h. Return ScanResult with anonymized text + entity list + duration
+
+Main internal data type
+-----------------------
+ScanResult
+Fields:
+- anonymized_text
+- entities
+- duration_ms
+
+Why this file matters
+---------------------
+This is what makes corporate-safe prompting possible, because the model can receive a redacted prompt instead of raw confidential data.
+
+
+------------------------------------------------------------
+4.7 backend/services/embedding_service.py
+------------------------------------------------------------
+
+This file powers the semantic cache.
+
+Main class
+----------
+EmbeddingService
+
+Main methods
+------------
+1. __init__(model_name)
+   Registers model name but delays loading.
+
+2. _ensure_loaded()
+   Loads sentence-transformers model on first embed() call.
+
+3. embed(text)
+   Turns a prompt into an embedding vector.
+   Used before semantic cache lookup and cache storage.
+
+4. cosine_similarity(a, b)
+   Compares two embeddings.
+   Used by Redis semantic cache.
+
+Why important
+-------------
+If two prompts are very similar, the app can reuse a cached answer and skip the LLM.
+
+
+------------------------------------------------------------
+4.8 backend/services/redis_service.py
+------------------------------------------------------------
+
+This is Phase 3 storage logic.
+It has two big jobs:
+1. Token Vault
+2. Semantic Cache
+
+Token Vault concept
+-------------------
+When PII is redacted, the backend keeps a temporary map like:
+- <PERSON_a3f2c1> -> John Smith
+- <EMAIL_123abc> -> john@example.com
+
+This is stored in Redis so the final answer can be restored later.
+
+Semantic Cache concept
+----------------------
+For similar prompts, avoid calling the main model again.
+Store:
+- embedding vector
+- anonymized LLM response
+
+Main class
+----------
+RedisService
+
+Main methods
+------------
+1. store_vault(session_id, token_map)
+   Stores token->original text mapping in Redis hash with TTL.
+
+2. restore_tokens(session_id, text)
+   Replaces anonymized tokens in model response with original text.
+   Used right before sending response to the user.
+
+3. get_cached_response(embedding, threshold=None)
+   Looks through cached Redis entries.
+   Computes cosine similarity.
+   Returns cached response if best score >= threshold.
+
+4. store_cache_entry(embedding, response)
+   Stores a new semantic cache entry.
+
+Design note
+-----------
+All public methods fail safely.
+If Redis is down:
+- vault store becomes no-op
+- restore returns original text unchanged
+- cache lookup becomes miss
+- cache store becomes no-op
+
+This keeps the app usable even without Redis.
+
+
+------------------------------------------------------------
+4.9 backend/services/llm_service.py
+------------------------------------------------------------
+
+This file handles Layer 2 and Layer 3 model calls.
+
+Layer 2 = gatekeeper model
+Layer 3 = main model
+
+Important data type
+-------------------
+GatekeeperResult
+Fields:
+- verdict: safe or unsafe
+- category: optional taxonomy code
+- raw_output: original model output
+
+Main class
+----------
+LLMService
+
+Main methods
+------------
+1. __init__(client, settings)
+   Stores shared AsyncClient and model settings.
+   Builds the /chat/completions endpoint once.
+
+2. check_with_gatekeeper(prompt)
+   Sends anonymized prompt to gatekeeper model.
+   Expected output format:
+   - safe
+   - unsafe\nS2
+
+   Then parses result using _parse_gatekeeper_output().
+
+3. call_main_llm(prompt, history=None)
+   Sends final safe prompt to main model.
+   Prepends history before current user message.
+
+4. _post_completions(payload, label)
+   Shared helper for both models.
+   - sends POST request
+   - handles timeout and connection failures
+   - handles non-2xx backend errors
+   - extracts choices[0].message.content
+
+5. _parse_gatekeeper_output(raw)
+   Parses Llama Guard style output into GatekeeperResult.
+
+Why important
+-------------
+This file cleanly separates:
+- safety classification
+- actual generation
+
+
+------------------------------------------------------------
+4.10 backend/routers/policies.py
+------------------------------------------------------------
+
+This file exposes policy endpoints.
+
+Main parts
+----------
+1. PolicyPayload
+   Pydantic model for three flags:
+   - aggressive_pii
+   - semantic_cache
+   - code_block
+
+2. read_policies()
+   GET /api/v1/policies
+   Returns the authenticated user's current settings.
+
+3. update_policies(payload)
+   PUT /api/v1/policies
+   Saves new settings into MySQL.
+
+
+------------------------------------------------------------
+4.11 backend/routers/chat.py
+------------------------------------------------------------
+
+This is the most important backend file.
+It implements the full firewall pipeline.
+
+Main helper
+-----------
+1. _storage_safe_prompt(raw_prompt, anonymized_prompt, aggressive_pii)
+   Decides what form of the prompt is safe to store.
+   If aggressive_pii is on, store anonymized prompt.
+   If off, store raw prompt.
+
+Main endpoint
+-------------
+2. chat(request, current_user)
+   POST /api/v1/chat
+
+This function contains the full workflow.
+
+Detailed request workflow inside chat()
+---------------------------------------
+
+Step 1: Read user and raw prompt
+- username comes from JWT dependency
+- raw_prompt comes from request.prompt
+
+Step 2: Load user policy flags from MySQL
+- aggressive_pii
+- semantic_cache
+- code_block
+
+Step 3: Prepare default scan result
+If PII policy is off, result defaults to:
+- anonymized_text = raw prompt
+- entities = []
+- duration = 0
+
+Step 4: Aggressive PII policy pre-scan
+If aggressive_pii is enabled:
+- Presidio scan runs immediately with aggressive=True
+- storage_prompt becomes anonymized text
+- model_prompt becomes anonymized text
+
+This ensures storage and model both get safe text.
+
+Step 5: Code execution block policy
+If code_block is enabled:
+- regex checks raw prompt for patterns like:
+  exec, eval, os.system, subprocess, shell, powershell, bash, DROP TABLE, DELETE FROM, etc.
+- if matched:
+  - log_request(... blocked=True ...)
+  - return HTTP 403
+
+Step 6: Injection detection (Layer 0)
+Runs detect_injection(raw_prompt)
+- if Gemini says malicious:
+  - write audit log
+  - return 403
+
+Step 7: PII gate logic
+If aggressive_pii is on:
+- use anonymized prompt for storage and model
+If off:
+- skip redaction entirely
+
+This is important:
+PII policy is a true on/off switch.
+When off, no redaction is applied.
+
+Step 8: Determine violation_type
+- "PII" if entities found
+- "None" otherwise
+This gets stored in audit logs.
+
+Step 9: Create chat_session_id and vault_id
+- chat_session_id groups a full conversation
+- vault_id groups one request's token vault entry
+
+Step 10: Token Vault write
+If Redis exists, aggressive_pii is on, and entities exist:
+- store token map in Redis
+
+Step 11: Semantic cache lookup
+If Redis exists and semantic_cache is enabled:
+- embed model_prompt
+- look for cached response
+
+If cache hit:
+- optionally restore tokens using vault
+- log request as allowed
+- save conversation to MongoDB
+- return ChatResponse immediately
+- skip gatekeeper and main model
+
+Step 12: Gatekeeper model (Layer 2)
+- call check_with_gatekeeper(model_prompt)
+- if unsafe:
+  - log blocked request with category
+  - return 400
+
+Step 13: Load conversation history for current session
+- get_conversation_history(username, session_id=chat_session_id)
+- this returns only same-session messages
+
+Step 14: Merge frontend temporary turns
+The frontend can send messages in request.messages.
+These are client-side in-memory turns not yet persisted.
+
+combined_history = client_history if client_history else history
+
+Step 15: Main model call (Layer 3)
+- call_main_llm(model_prompt, history=combined_history)
+
+Step 16: Cache store
+If semantic cache enabled:
+- store new embedding + raw LLM response in Redis
+
+Step 17: De-anonymize final response
+If aggressive_pii and Redis vault exist:
+- restore original text in response
+Else:
+- final_response = llm_response
+
+Step 18: Save conversation to MongoDB
+Saves:
+- storage_prompt
+- llm_response
+- session_id
+- session title if first message in session
+
+Note: Mongo stores llm_response, not final_response.
+That means storage remains safer than user-facing view.
+
+Step 19: Save audit log to MySQL
+- blocked=False
+- violation_type based on PII detection
+
+Step 20: Return ChatResponse
+Contains both:
+- llm_response (raw model output, possibly still tokenized)
+- final_response (restored text for user)
+
+
+============================================================
+5. POLICY SYSTEM EXPLANATION
+============================================================
+
+There are 3 main policies.
+
+------------------------------------------------------------
+5.1 Aggressive PII Redaction
+------------------------------------------------------------
+
+Stored in MySQL as aggressive_pii.
+Frontend name: aggressivePii.
+
+When ON:
+- backend scans prompt with Presidio + fallback regexes
+- prompt sent to model is anonymized
+- prompt stored in logs/history is anonymized
+- token map is stored in Redis
+- final response can be de-anonymized for user display
+
+When OFF:
+- no PII scan is applied
+- raw prompt is sent to model
+- raw prompt is stored
+- no token vault flow is used
+
+Important detail:
+This was intentionally designed as a strict true on/off gate.
+
+
+------------------------------------------------------------
+5.2 Semantic Cache
+------------------------------------------------------------
+
+Stored in MySQL as semantic_cache.
+Frontend name: semanticCache.
+
+When ON:
+- backend creates embedding from prompt
+- checks Redis cache for similar prompt
+- if hit, returns cached response and skips LLM
+- after new LLM response, stores embedding+response in cache
+
+When OFF:
+- no embedding generation
+- no Redis cache lookup
+- no cache storage
+- every request reaches the model pipeline
+
+
+------------------------------------------------------------
+5.3 Code Execution Block
+------------------------------------------------------------
+
+Stored in MySQL as code_block.
+Frontend name: codeBlock.
+
+When ON:
+- backend regex scans raw prompt for dangerous code or destructive commands
+- if matched, request is blocked before expensive model work
+
+When OFF:
+- this extra regex block does nothing
+
+Examples of blocked patterns:
+- exec
+- eval
+- os.system
+- subprocess
+- shell=
+- powershell
+- bash
+- DROP TABLE
+- DELETE FROM
+- TRUNCATE
+
+
+============================================================
+6. CHAT HISTORY IMPLEMENTATION (VERY IMPORTANT)
+============================================================
+
+This project has session-based chat history.
+
+Goal
+----
+- New chat should start empty
+- Old chat should preserve only its own history
+- Old chats should not contaminate new ones
+
+How it is implemented
+---------------------
+
+Backend side
+------------
+1. Every chat request has chat_session_id
+2. If frontend sends no session ID, backend creates new UUID
+3. save_conversation() stores each turn in MongoDB with session_id
+4. list_user_sessions() groups history by session_id
+5. get_session_messages(username, session_id) rebuilds one old session for the UI
+6. get_conversation_history(username, session_id=...) returns only that session for model context
+
+This is what prevents context bleed.
+
+Frontend side
+-------------
+The main logic is in frontend-react/lib/chatStore.ts and PlaygroundChat.tsx.
+
+chatStore.ts
+------------
+This is a module-level store, not React state inside one component.
+That means it survives page navigation.
+
+Main chatStore functions
+------------------------
+1. getMessages()
+   Returns current message array.
+
+2. isSeeded()
+   Whether history has already been loaded.
+
+3. markSeeded()
+   Marks that initial session state is set.
+
+4. getSessionId()
+   Returns current active session ID.
+
+5. getLoading() / setLoading(v)
+   Keeps loading state even if page unmounts.
+
+6. setMessages(msgs)
+   Replaces current chat with loaded session messages.
+
+7. push(...msgs)
+   Appends new chat messages.
+
+8. newSession()
+   Starts new chat.
+   It:
+   - clears messages
+   - sets seeded=true
+   - resets loading=false
+   - generates fresh UUID session ID
+
+9. clearChat()
+   Used on logout.
+   Clears everything and resets state.
+
+PlaygroundChat.tsx history logic
+--------------------------------
+1. On initial mount:
+   - it does NOT auto-load all old messages anymore
+   - it only marks the store as seeded
+   This keeps a new chat empty
+
+2. refreshSessions()
+   Calls backend getChatSessions() to populate history dropdown
+
+3. handleNewChat()
+   Calls chatStore.newSession()
+   This creates a completely fresh conversation
+
+4. handleLoadSession(session)
+   When user clicks an old session:
+   - fetches getSessionMessages(session.session_id)
+   - converts them into ChatMessage[]
+   - loads them into chatStore.setMessages()
+   - sets currentSessionId
+   - sets activeSessionTitle
+
+5. handleSubmit(e)
+   Before sending message:
+   - gets current session ID from loaded session or current store
+   - builds priorTurns from existing in-memory messages
+   - sends prompt + priorTurns + sessionId to backend
+
+6. Backend then uses that same session ID to scope Mongo history retrieval
+
+Result
+------
+- New chat = no old history
+- Old chat = only its own history
+- Model context is isolated per session
+
+
+============================================================
+7. FRONTEND FILE-BY-FILE EXPLANATION
+============================================================
+
+------------------------------------------------------------
+7.1 frontend-react/app/layout.tsx
+------------------------------------------------------------
+
+Root layout for the whole Next app.
+Main job:
+- load fonts
+- set HTML/body theme classes
+- wrap all pages
+
+Main function
+-------------
+1. RootLayout({ children })
+   Returns HTML shell for entire app.
+
+
+------------------------------------------------------------
+7.2 frontend-react/app/(app)/layout.tsx
+------------------------------------------------------------
+
+Layout for authenticated app pages.
+
+Main responsibilities:
+- sidebar
+- top bar
+- clock
+- theme toggle
+- logout
+
+Main function
+-------------
+1. AppLayout({ children })
+   Renders sidebar + main content.
+
+Important internal logic
+------------------------
+- sidebarOpen state controls expanded/collapsed sidebar
+- clock state updates every second
+- handleLogout() calls frontend logout API, clears chatStore, navigates to /login
+
+
+------------------------------------------------------------
+7.3 frontend-react/components/Sidebar.tsx
+------------------------------------------------------------
+
+Sidebar navigation component.
+
+Main function
+-------------
+1. Sidebar({ open, onToggle })
+   Renders app navigation items:
+   - Overview
+   - Live Traffic
+   - Playground
+   - Policies
+
+Uses usePathname() to show active route.
+
+
+------------------------------------------------------------
+7.4 frontend-react/app/login/page.tsx
+------------------------------------------------------------
+
+Login page.
+
+Main components/functions
+-------------------------
+1. LoginForm()
+   Holds login form state.
+   State:
+   - username
+   - password
+   - error
+   - loading
+
+   Main function inside:
+   - handleSubmit(e)
+     Calls login(username, password)
+     On success: router.push('/dashboard')
+     On failure: show error
+
+   It also reads search param registered=1 to show signup success banner.
+
+2. LoginPage()
+   Outer page shell.
+   Uses Suspense because useSearchParams() must be inside a client suspense boundary.
+
+
+------------------------------------------------------------
+7.5 frontend-react/app/signup/page.tsx
+------------------------------------------------------------
+
+Signup page.
+
+Main components/functions
+-------------------------
+1. Field(...)
+   Reusable input component used by signup form.
+
+2. SignupPage()
+   Holds signup form state:
+   - firstName
+   - lastName
+   - email
+   - username
+   - password
+   - confirmPassword
+   - error
+   - loading
+
+   Main logic:
+   - set(field) helper updates one form field
+   - handleSubmit(e)
+     - validates password match
+     - validates min password length
+     - calls signup(...) API helper
+     - redirects to /login?registered=1 on success
+
+
+------------------------------------------------------------
+7.6 frontend-react/app/api/auth/login/route.ts
+------------------------------------------------------------
+
+This is a Next.js server route.
+It acts as auth bridge between browser and FastAPI.
+
+Main function
+-------------
+1. POST(request)
+   - reads username/password from JSON
+   - converts to x-www-form-urlencoded because FastAPI /token expects OAuth2 form
+   - sends request to backend /token
+   - if success, sets httpOnly cookie named token
+   - returns { ok: true }
+
+Why important
+-------------
+The JWT never touches browser JavaScript directly.
+It stays in cookie storage.
+
+
+------------------------------------------------------------
+7.7 frontend-react/app/api/auth/signup/route.ts
+------------------------------------------------------------
+
+Main function
+-------------
+1. POST(request)
+   Reads signup form JSON and forwards it to backend /register.
+
+
+------------------------------------------------------------
+7.8 frontend-react/app/api/auth/logout/route.ts
+------------------------------------------------------------
+
+Main function
+-------------
+1. POST()
+   Clears token cookie by setting maxAge=0.
+
+
+------------------------------------------------------------
+7.9 frontend-react/proxy.ts
+------------------------------------------------------------
+
+This is route protection middleware/proxy logic for Next.
+
+Main function
+-------------
+1. proxy(request)
+   - allows public pages: /login, /signup
+   - allows Next internals and /api/auth routes
+   - checks for token cookie on all other routes
+   - redirects to /login if token is missing
+
+This is what protects dashboard/playground/policies/traffic.
+
+
+------------------------------------------------------------
+7.10 frontend-react/app/api/proxy/[...path]/route.ts
+------------------------------------------------------------
+
+This is the secure passthrough layer.
+
+Main function
+-------------
+1. handler(request, { params })
+   - extracts token from httpOnly cookie
+   - builds target backend URL
+   - forwards body for non-GET methods
+   - sends Authorization: Bearer <token>
+   - returns backend response unchanged
+
+Why important
+-------------
+The browser never manually handles JWT in JS.
+All authenticated backend requests go through this safe proxy.
+
+
+------------------------------------------------------------
+7.11 frontend-react/lib/api.ts
+------------------------------------------------------------
+
+Typed frontend API client.
+
+Main helper
+-----------
+1. request<T>(url, init)
+   Generic fetch helper with credentials included.
+   Throws Error with status/body if response is not ok.
+
+Main exported functions
+-----------------------
+2. login(username, password)
+3. signup(username, password, first_name, last_name, email)
+4. logout()
+5. sendChat(prompt, messages, session_id)
+6. getStats()
+7. getActivityLogs()
+8. getPolicies()
+9. setPolicies(data)
+10. getChatHistory()
+11. getChatSessions()
+12. getSessionMessages(session_id)
+
+This file is the main frontend-to-backend integration layer.
+
+
+------------------------------------------------------------
+7.12 frontend-react/lib/types.ts
+------------------------------------------------------------
+
+Holds shared TypeScript types.
+
+Important types
+---------------
+- TrafficEntry
+- LatencyPoint
+- PolicyState
+- AnonymizedEntity
+- ChatMessage
+- BackendChatResponse
+- BackendStats
+- BackendLog
+
+These make the frontend strongly typed.
+
+
+------------------------------------------------------------
+7.13 frontend-react/lib/pageStore.ts
+------------------------------------------------------------
+
+Simple module-level cache for page data.
+
+Main functions
+--------------
+1. set(key, data)
+2. get(key)
+3. isFresh(key, maxAgeMs=30000)
+4. clear(key)
+
+Used to reduce refetching for pages like dashboard/policies/traffic.
+
+
+------------------------------------------------------------
+7.14 frontend-react/lib/chatStore.ts
+------------------------------------------------------------
+
+Already explained above in chat history section.
+This is the in-memory session-aware chat state store.
+
+
+------------------------------------------------------------
+7.15 frontend-react/app/(app)/dashboard/page.tsx
+------------------------------------------------------------
+
+Dashboard overview page.
+
+Main component/function
+-----------------------
+1. StatCard(...)
+   Small reusable dashboard stat card.
+
+2. DashboardPage()
+   - loads backend stats using getStats()
+   - uses pageStore to avoid unnecessary refetch on quick revisits
+   - uses useMockTelemetry() for demo telemetry charts
+   - computes blockRate
+
+Shows:
+- total requests
+- block rate
+- blocked count
+- avg latency (mocked telemetry)
+- token vault telemetry chart
+
+
+------------------------------------------------------------
+7.16 frontend-react/hooks/useMockTelemetry.ts
+------------------------------------------------------------
+
+This provides demo live telemetry data for charts.
+
+Main helper functions
+---------------------
+- randomChoice()
+- randomBetween()
+- fmtTime()
+- makeEntry()
+- makeLatencyPoint()
+- seedLatency()
+- seedTraffic()
+
+Main hook
+---------
+1. useMockTelemetry()
+   Returns:
+   - trafficStream
+   - latencyHistory
+   - tokensSecuredToday
+
+It simulates live dashboard data using timers.
+This is demo/visual telemetry, not real backend latency measurement.
+
+
+------------------------------------------------------------
+7.17 frontend-react/app/(app)/traffic/page.tsx
+------------------------------------------------------------
+
+Live traffic page.
+
+Main pieces
+-----------
+1. mapLog(log, idx)
+   Converts backend log row into TrafficEntry type.
+
+2. TrafficPage()
+   - polls backend every 5 seconds
+   - loads activity logs
+   - converts them to display rows
+   - adds only unseen IDs
+   - caches entries in pageStore
+
+This gives a live SOC-style log table.
+
+
+------------------------------------------------------------
+7.18 frontend-react/app/(app)/policies/page.tsx
+------------------------------------------------------------
+
+Policies page.
+
+Main helpers
+------------
+1. toBackend(p)
+   Converts frontend camelCase policy state to backend snake_case.
+
+2. fromBackend(d)
+   Converts backend snake_case to frontend camelCase.
+
+3. DEFAULT
+   Default policy values.
+
+Main component
+--------------
+4. PoliciesPage()
+   - loads policies from backend on mount
+   - uses pageStore cache
+   - shows loading skeletons if needed
+   - handleToggle(key) updates UI immediately
+   - sends new policy state to backend using setPolicies()
+   - reverts UI if save fails
+
+This page is the frontend control panel for the firewall.
+
+
+------------------------------------------------------------
+7.19 frontend-react/components/widgets/PolicyEngine.tsx
+------------------------------------------------------------
+
+UI widget for displaying the 3 policy rows.
+
+Main constants/functions
+------------------------
+1. POLICIES array
+   Defines:
+   - aggressivePii
+   - semanticCache
+   - codeBlock
+   with human descriptions
+
+2. PolicyEngine({ policies, onToggle })
+   Renders rows and ToggleSwitch components.
+
+
+------------------------------------------------------------
+7.20 frontend-react/components/ui/ToggleSwitch.tsx
+------------------------------------------------------------
+
+Main component
+--------------
+1. ToggleSwitch({ checked, onChange, label })
+   Reusable switch button used for policies.
+
+
+------------------------------------------------------------
+7.21 frontend-react/app/(app)/playground/page.tsx
+------------------------------------------------------------
+
+Simple wrapper page for the chat widget.
+
+Main component
+--------------
+1. PlaygroundPage()
+   Renders page heading and PlaygroundChat widget.
+
+
+------------------------------------------------------------
+7.22 frontend-react/components/widgets/PlaygroundChat.tsx
+------------------------------------------------------------
+
+This is the most important frontend file.
+
+Main helpers
+------------
+1. RISK_PATTERNS
+   Regex list used only for client-side visual threat scoring.
+   This score is a UI hint, not actual backend enforcement.
+
+2. computeScore(text)
+   Computes client-side risk score 0-100.
+
+3. scoreColor(score)
+   Returns color for score bar.
+
+4. scoreLabel(score)
+   Returns LOW RISK / MODERATE / HIGH RISK.
+
+5. EntityChip({ type })
+   Small chip for PII entity type display.
+
+6. CacheHitBadge()
+   Badge shown when backend response came from semantic cache.
+
+7. MessageBubble({ msg })
+   Renders user or assistant message bubble.
+   If assistant has firewallMeta, it shows:
+   - cache hit badge
+   - entity chips
+   - scan duration
+
+Main component
+--------------
+8. PlaygroundChat()
+
+Important logic inside PlaygroundChat
+------------------------------------
+A. useSyncExternalStore(...) subscriptions
+   Connects React UI to module-level chatStore.
+   This is what makes chat survive tab switches.
+
+B. Local state
+   - input
+   - score
+   - sessions
+   - sessionDropdownOpen
+   - activeSessionTitle
+   - currentSessionId
+
+C. Initial mount
+   Does NOT auto-load all history anymore.
+   This is critical for new chat isolation.
+
+D. refreshSessions()
+   Reloads session dropdown from backend.
+
+E. Outside click handler
+   Closes history dropdown if clicked outside.
+
+F. Risk scoring effect
+   Updates UI score after short debounce.
+
+G. Auto scroll effect
+   Scrolls to bottom on new messages/loading.
+
+H. handleNewChat()
+   Calls chatStore.newSession()
+
+I. handleLoadSession(session)
+   Loads old session from backend and hydrates chatStore.
+
+J. handleSubmit(e)
+   Main send-message function.
+   Steps:
+   - prevent default
+   - ignore empty prompt or loading state
+   - optimistically push user message to chatStore
+   - clear input
+   - set loading true
+   - build priorTurns from existing in-memory messages
+   - determine session ID
+   - call sendChat(trimmed, priorTurns, sessionId)
+   - push assistant result with firewallMeta on success
+   - push blocked/error message on failure
+   - set loading false at end
+
+This component is the core user-facing AI interface.
+
+
+============================================================
+8. HOW AUTHENTICATION WORKS
+============================================================
+
+1. User submits login form in LoginForm.handleSubmit()
+2. frontend lib/api.ts login() calls /api/auth/login
+3. Next login route forwards credentials to FastAPI /token
+4. FastAPI verifies password and returns JWT
+5. Next route stores token in httpOnly cookie
+6. proxy.ts checks cookie for protected pages
+7. app/api/proxy/[...path]/route.ts attaches token as Bearer auth to backend calls
+
+Why this design is good
+-----------------------
+- JWT is not exposed directly to client-side JS
+- browser keeps auth in cookie
+- Next.js server routes handle backend communication safely
+
+
+============================================================
+9. HOW DATA MOVES THROUGH THE SYSTEM
+============================================================
+
+Login data
+----------
+Browser -> Next auth route -> FastAPI /token -> JWT -> httpOnly cookie
+
+Chat data
+---------
+Browser -> Next proxy route -> FastAPI /api/v1/chat
+-> injection detection
+-> optional PII redaction
+-> optional Redis vault/cache
+-> gatekeeper model
+-> main model
+-> MongoDB save
+-> MySQL audit log
+-> response back to browser
+
+Policy data
+-----------
+Browser -> Next proxy route -> FastAPI /api/v1/policies -> MySQL user_policies
+
+Traffic page data
+-----------------
+Browser -> Next proxy route -> FastAPI /activity_logs -> MySQL logs
+
+Dashboard stats data
+--------------------
+Browser -> Next proxy route -> FastAPI /stats -> MySQL logs aggregation
+
+Old session load
+----------------
+Browser -> Next proxy route -> FastAPI /history/{session_id} -> MongoDB conversations
+
+
+============================================================
+10. MOST IMPORTANT DESIGN DECISIONS
+============================================================
+
+1. Shared services are initialized once in FastAPI lifespan
+   Good for performance and memory reuse.
+
+2. Policy system is per-user and stored in MySQL
+   This makes rules personalized and persistent.
+
+3. Chat history is scoped by session_id
+   This prevents old chats from polluting new chats.
+
+4. Frontend chat state is module-level, not page-local only
+   This preserves user experience during navigation.
+
+5. Redis features degrade gracefully
+   The app still works if Redis is unavailable.
+
+6. Prompt storage uses anonymized prompt when PII policy is enabled
+   This keeps storage safer than raw prompts.
+
+7. UI risk scoring is separate from backend enforcement
+   The frontend score is just a visual hint.
+   Real security decisions happen in backend/chat.py.
+
+
+============================================================
+11. IF YOU WANT TO EXPLAIN THIS PROJECT TO SOMEONE QUICKLY
+============================================================
+
+Short explanation
+-----------------
+This is a secure AI chat platform where all prompts pass through a firewall before reaching the LLM. The firewall can detect prompt injection, redact PII, block unsafe code-related prompts, reuse cached answers for similar prompts, store audit logs, and keep chat history separated by session.
+
+One-line academic summary
+-------------------------
+This codebase implements a policy-driven LLM firewall using FastAPI, Next.js, MySQL, MongoDB, Redis, Presidio, and an OpenAI-compatible inference server to provide secure, auditable, session-aware enterprise AI interactions.
+
+
+============================================================
+12. THE FILES YOU SHOULD STUDY FIRST
+============================================================
+
+If you want to understand the project fast, read these in order:
+
+Backend priority order
+----------------------
+1. backend/routers/chat.py
+2. backend/database.py
+3. backend/services/presidio_service.py
+4. backend/services/redis_service.py
+5. backend/services/llm_service.py
+6. backend/main.py
+7. backend/dependencies.py
+8. backend/models/schemas.py
+
+Frontend priority order
+-----------------------
+1. frontend-react/components/widgets/PlaygroundChat.tsx
+2. frontend-react/lib/chatStore.ts
+3. frontend-react/lib/api.ts
+4. frontend-react/app/(app)/policies/page.tsx
+5. frontend-react/components/widgets/PolicyEngine.tsx
+6. frontend-react/app/(app)/dashboard/page.tsx
+7. frontend-react/app/api/proxy/[...path]/route.ts
+8. frontend-react/proxy.ts
+9. frontend-react/app/login/page.tsx
+10. frontend-react/app/signup/page.tsx
+
+
+END OF DOCUMENT

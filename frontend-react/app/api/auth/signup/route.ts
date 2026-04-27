@@ -21,8 +21,10 @@ export async function POST(request: NextRequest) {
     }
 
     return NextResponse.json({ ok: true }, { status: 201 });
-  } catch {
-    return NextResponse.json({ detail: "Signup failed" }, { status: 500 });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[/api/auth/signup] fetch to backend failed:", message);
+    return NextResponse.json({ detail: `Signup failed: ${message}` }, { status: 500 });
   }
 }
 

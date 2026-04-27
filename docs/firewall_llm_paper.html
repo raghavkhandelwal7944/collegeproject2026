@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>A Multi-Layer Firewall for Secure Large Language Model Interactions</title>
+  <style>
+    :root {
+      --page-width: 210mm;
+      --page-height: 297mm;
+      --text: #000;
+      --muted: #222;
+      --rule: #000;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      background: #dcdcdc;
+      color: var(--text);
+      font-family: "Times New Roman", Times, serif;
+      line-height: 1.22;
+      padding: 18px;
+    }
+
+    .pages {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 18px;
+    }
+
+    .page {
+      width: var(--page-width);
+      min-height: var(--page-height);
+      background: #fff;
+      padding: 19mm 15mm 18mm;
+      box-shadow: 0 4px 18px rgba(0,0,0,0.14);
+      position: relative;
+    }
+
+    .title {
+      text-align: center;
+      font-size: 19px;
+      font-weight: 400;
+      line-height: 1.12;
+      margin: 0 0 10px;
+    }
+
+    .authors,
+    .affiliation,
+    .emails {
+      text-align: center;
+      font-size: 12px;
+      margin: 0;
+    }
+
+    .authors { font-weight: 700; }
+    .affiliation { margin-top: 2px; }
+    .emails { margin-top: 4px; font-size: 11px; }
+
+    .columns {
+      column-count: 2;
+      column-gap: 22px;
+      font-size: 11px;
+      margin-top: 12px;
+      text-align: justify;
+    }
+
+    .columns p,
+    .columns ul,
+    .columns ol,
+    .columns table,
+    .columns .section,
+    .columns .subsection,
+    .columns .table-wrap {
+      break-inside: avoid;
+      page-break-inside: avoid;
+    }
+
+    .abstract {
+      margin-bottom: 8px;
+    }
+
+    .abstract b i {
+      font-weight: 700;
+    }
+
+    .section {
+      text-align: center;
+      font-variant: small-caps;
+      font-size: 12px;
+      margin: 10px 0 6px;
+      letter-spacing: 0.2px;
+    }
+
+    .subsection {
+      font-size: 11.5px;
+      font-style: italic;
+      font-weight: 700;
+      margin: 8px 0 4px;
+      text-align: left;
+    }
+
+    p {
+      margin: 0 0 7px;
+      text-indent: 16px;
+    }
+
+    .abstract p,
+    .no-indent,
+    ul,
+    ol,
+    .refs p,
+    .table-wrap p {
+      text-indent: 0;
+    }
+
+    ul, ol {
+      margin: 3px 0 8px 17px;
+      padding: 0;
+    }
+
+    li { margin: 1px 0; }
+
+    .table-wrap {
+      margin: 8px auto 10px;
+      width: 86%;
+      text-align: center;
+    }
+
+    .table-title {
+      font-size: 9px;
+      font-weight: 700;
+      text-transform: uppercase;
+      margin-bottom: 2px;
+    }
+
+    .table-subtitle {
+      font-size: 8.5px;
+      margin-bottom: 4px;
+      text-transform: uppercase;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 9px;
+    }
+
+    th, td {
+      border-top: 1px solid #000;
+      border-bottom: 1px solid #000;
+      padding: 3px 5px;
+      text-align: left;
+      vertical-align: top;
+    }
+
+    th { text-align: center; font-weight: 700; }
+
+    .center { text-align: center; }
+    .ack, .refs { margin-top: 8px; }
+    .refs p { margin: 0 0 4px; font-size: 10px; }
+
+    @page {
+      size: A4;
+      margin: 0;
+    }
+
+    @media print {
+      body {
+        background: #fff;
+        padding: 0;
+      }
+      .pages {
+        gap: 0;
+      }
+      .page {
+        box-shadow: none;
+        margin: 0;
+        page-break-after: always;
+      }
+      .page:last-child {
+        page-break-after: auto;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="pages">
+    <section class="page">
+      <h1 class="title">A Multi-Layer Firewall for Secure Large Language Model Interactions</h1>
+      <p class="authors">Raghav Khandelwal, Swarnalatha P</p>
+      <p class="affiliation">Department of Computer Science and Engineering</p>
+      <p class="affiliation">Vellore Institute of Technology, India</p>
+      <p class="emails">raghav.khandelwal2022@vit.ac.in, swarnalatha@vit.ac.in</p>
+
+      <div class="columns">
+        <div class="abstract">
+          <p><b><i>Abstract</i></b>—Large Language Models are increasingly used in conversational systems, but direct exposure of raw prompts to models creates risks such as prompt injection, privacy leakage, unsafe content generation, and repeated sensitive-query processing. This paper presents <i>Firewall LLM</i>, a full-stack security gateway for LLM applications built using FastAPI and Next.js. The system introduces a layered protection pipeline combining prompt risk inspection, personally identifiable information redaction, token vaulting, semantic caching, and authenticated access control. The backend integrates Gemini-based prompt screening, Redis-assisted privacy and caching services, MySQL and MongoDB persistence, and a React dashboard for interaction monitoring. The proposed system demonstrates a practical architecture for safer LLM deployment in local or hybrid inference environments.</p>
+        </div>
+
+        <div class="section">I. Introduction</div>
+        <p>The rapid adoption of LLM-based assistants in education, software engineering, and enterprise workflows has created a need for reliable security boundaries around model interaction. Prompts submitted by users may contain sensitive personal data, malicious instructions, or attempts to bypass safeguards. Without an intermediate filtering layer, such requests may be forwarded directly to a model, resulting in privacy compromise or unsafe outputs.</p>
+        <p>This project addresses that problem by designing and implementing a secure LLM firewall that sits between the user interface and model-serving layer. The system is intended for controlled deployments where model safety, prompt hygiene, and system observability are important. The work combines backend enforcement, persistent storage, authentication, and a modern monitoring dashboard.</p>
+        <p>The key contributions of this work are:</p>
+        <ul>
+          <li>a multi-layer prompt security workflow for LLM applications;</li>
+          <li>a practical integration of PII redaction, risk detection, token vaulting, and semantic caching;</li>
+          <li>a complete web-based implementation with authentication, analytics, and chat history support.</li>
+        </ul>
+
+        <div class="section">II. Methodology</div>
+
+        <div class="subsection">A. System Architecture</div>
+        <p>The proposed architecture consists of a FastAPI backend, a Next.js 16 frontend, and supporting infrastructure services including MySQL, MongoDB, Redis, Ollama, and Gemini. Users interact through a web dashboard, while the backend processes requests through a layered firewall pipeline before forwarding content to the target LLM. The architecture separates user interaction, policy enforcement, data persistence, and model communication into modular components.</p>
+
+        <div class="subsection">B. Security Workflow</div>
+        <p>The request lifecycle is organized as a staged pipeline. First, the application validates the user session using JWT-based authentication. Second, prompt content is examined for malicious or unsafe intent using rule-based and model-assisted inspection. Third, privacy-sensitive entities such as email addresses, phone numbers, and API keys are redacted or replaced. Fourth, Redis-backed token vault and semantic cache mechanisms improve privacy retention and avoid unnecessary repeated inference. Finally, the sanitized request is sent to the configured model endpoint.</p>
+        <ol>
+          <li>User authentication and session validation.</li>
+          <li>Prompt risk analysis and injection detection.</li>
+          <li>PII masking and token replacement.</li>
+          <li>Semantic cache lookup for similar previous queries.</li>
+          <li>LLM invocation and monitored response delivery.</li>
+        </ol>
+
+        <div class="subsection">C. Backend Implementation</div>
+        <p>The backend is implemented in Python using FastAPI. It includes authentication endpoints for user registration and token issuance, chat-processing routes, health endpoints, and policy services. During startup, the application initializes the database schema, loads the Presidio service, configures the shared HTTP inference client, loads the sentence-transformer embedding model, and connects to Redis when available. This startup lifecycle reduces cold-start delays during the first user request.</p>
+
+        <div class="subsection">D. Frontend Design</div>
+        <p>The frontend is implemented using Next.js 16, React 19, TypeScript, and Tailwind CSS. It provides login, signup, dashboard, policy views, traffic monitoring, and a playground chat interface. The user interface also computes a visible prompt risk indicator to provide immediate feedback during interaction. State management and API integration are handled using lightweight utility modules and typed request helpers.</p>
+      </div>
+    </section>
+
+    <section class="page">
+      <div class="columns">
+        <div class="section">III. Implementation Details</div>
+
+        <div class="subsection">A. Core Components</div>
+        <p>The implemented system contains several coordinated modules. The FastAPI backend exposes registration, token generation, chat, policy, and health endpoints. Database support combines MySQL for user and policy records with MongoDB for conversational history. Redis is used to support token vault and semantic cache features. The frontend dashboard exposes the operational state of the firewall through widgets and chat views.</p>
+
+        <div class="subsection">B. Technology Stack</div>
+        <p>The project uses FastAPI, HTTPX, Redis asyncio, Python-Jose, Presidio, spaCy, Sentence Transformers, Gemini, and Ollama on the backend. The frontend uses Next.js, React, TypeScript, Tailwind CSS, Framer Motion, Recharts, and related development tooling. This combination supports both security analysis and an interactive web experience.</p>
+
+        <div class="table-wrap">
+          <div class="table-title">Table I</div>
+          <div class="table-subtitle">System Summary</div>
+          <table>
+            <thead>
+              <tr><th>Feature</th><th>Value</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Project Type</td><td>Secure LLM gateway / firewall</td></tr>
+              <tr><td>Backend Framework</td><td>FastAPI</td></tr>
+              <tr><td>Frontend Framework</td><td>Next.js 16 + React 19</td></tr>
+              <tr><td>Primary Security Layers</td><td>Risk detection, PII redaction, token vault, semantic cache</td></tr>
+              <tr><td>Databases</td><td>MySQL, MongoDB, Redis</td></tr>
+              <tr><td>Inference Support</td><td>Gemini and Ollama-based models</td></tr>
+              <tr><td>Authentication</td><td>JWT token flow</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="subsection">C. Validation Strategy</div>
+        <p>The project includes unit tests for the firewall logic, including malicious prompt detection and redaction of email addresses, phone numbers, and API keys. These tests verify both positive and negative cases and help ensure repeatable validation for core security behaviors. Additional manual validation was conducted using the web interface, startup scripts, and direct API calls to confirm end-to-end functionality.</p>
+
+        <div class="subsection">D. Sample Functional Capabilities</div>
+        <ul>
+          <li>user registration and login using secure password hashing;</li>
+          <li>chat request forwarding through a controlled API layer;</li>
+          <li>prompt inspection for injection and unsafe intent;</li>
+          <li>redaction of sensitive entities before downstream processing;</li>
+          <li>traffic, policy, and telemetry views in the frontend dashboard.</li>
+        </ul>
+
+        <div class="section">IV. Evaluation</div>
+
+        <div class="subsection">A. Evaluation Metrics</div>
+        <p>The system was evaluated qualitatively using correctness of redaction, response flow stability, user authentication behavior, and interpretability of the risk score presented in the frontend. Functional consistency was also examined by testing startup readiness, API communication between the frontend and backend, and safe handling of malicious prompts.</p>
+
+        <div class="subsection">B. Observations</div>
+        <p>The multi-layer design improves practical safety by distributing responsibility across independent controls rather than relying on a single classification step. PII redaction reduces direct exposure of user secrets, while semantic caching improves repeated-query efficiency. The dashboard contributes transparency by showing the interaction state, risk signal, and operational flow to the user.</p>
+
+        <div class="table-wrap">
+          <div class="table-title">Table II</div>
+          <div class="table-subtitle">Representative Modules</div>
+          <table>
+            <thead>
+              <tr><th>Module</th><th>Purpose</th></tr>
+            </thead>
+            <tbody>
+              <tr><td><span class="no-indent">backend/main.py</span></td><td>Application startup, routing, auth, and health services</td></tr>
+              <tr><td><span class="no-indent">backend/firewall.py</span></td><td>Prompt risk detection and PII redaction logic</td></tr>
+              <tr><td><span class="no-indent">tests/test_firewall.py</span></td><td>Unit tests for detection and redaction behaviors</td></tr>
+              <tr><td><span class="no-indent">frontend-react/app/</span></td><td>User-facing pages and API proxy routes</td></tr>
+              <tr><td><span class="no-indent">frontend-react/components/</span></td><td>Dashboard widgets and playground interaction UI</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="section">V. Applications</div>
+        <p>The proposed system can be applied in educational assistants, enterprise copilots, internal knowledge tools, and prototype AI products that require an intermediate security gateway. It is especially useful in environments where the model endpoint should not directly receive raw user input without inspection or privacy filtering.</p>
+
+        <div class="section">VI. Discussion</div>
+        <p>This implementation demonstrates that LLM security can be approached as a layered systems problem rather than a single moderation call. However, the present solution still depends on externally configured models and local infrastructure availability. Future work can extend the platform with richer policy authoring, detailed audit trails, role-based access control, and quantitative benchmarking across attack categories.</p>
+
+        <div class="section">VII. Conclusion</div>
+        <p>In this paper, a multi-layer security framework for LLM applications was presented and implemented as a complete working web platform. The system integrates secure authentication, prompt inspection, privacy-preserving preprocessing, semantic reuse, and dashboard-based monitoring. The resulting architecture offers a practical foundation for safer LLM deployment and demonstrates how modern web and AI infrastructure can be combined into a structured security gateway.</p>
+
+        <div class="section ack">Acknowledgment</div>
+        <p class="no-indent">The author thanks the project guide for guidance, review, and support during the design and implementation of this work.</p>
+
+        <div class="section refs">References</div>
+        <div class="refs">
+          <p>[1] FastAPI, “FastAPI framework documentation.” [Online]. Available: https://fastapi.tiangolo.com</p>
+          <p>[2] Next.js, “Next.js documentation.” [Online]. Available: https://nextjs.org/docs</p>
+          <p>[3] Microsoft Presidio, “Data protection and PII anonymization toolkit.” [Online]. Available: https://microsoft.github.io/presidio</p>
+          <p>[4] Redis, “Redis documentation.” [Online]. Available: https://redis.io/docs</p>
+          <p>[5] Sentence Transformers, “Embeddings for semantic similarity.” [Online]. Available: https://www.sbert.net</p>
+          <p>[6] Google Generative AI, “Gemini API documentation.” [Online]. Available: https://ai.google.dev</p>
+        </div>
+      </div>
+    </section>
+  </div>
+</body>
+</html>

@@ -19,19 +19,19 @@ const POLICIES: {
     key: "aggressivePii",
     title: "Aggressive PII Redaction",
     description:
-      "Extends detection to low-confidence entities and partial matches.",
+      "When enabled, prompts are redacted before model/storage use; when disabled, no PII redaction is applied.",
   },
   {
     key: "semanticCache",
     title: "Semantic Caching",
     description:
-      "Return cached responses for semantically similar prompts (≥ 0.95 cosine).",
+      "When enabled, reuse cached responses for similar prompts; when disabled, every request goes to the model.",
   },
   {
     key: "codeBlock",
     title: "Code Execution Block",
     description:
-      "Flag and quarantine prompts requesting shell commands or code execution.",
+      "When enabled, block prompts requesting command execution or destructive code; when disabled, this policy does nothing.",
   },
 ];
 

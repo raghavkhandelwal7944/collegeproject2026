@@ -9,18 +9,13 @@ interface ToggleSwitchProps {
 }
 
 export function ToggleSwitch({ checked, onChange, label }: ToggleSwitchProps) {
-  // Spread bypasses the axe/aria static JSX linter which can't evaluate inline expressions
-  const switchProps = {
-    "aria-checked": (checked ? "true" : "false") as "true" | "false",
-    ...(label ? { "aria-label": label } : {}),
-  };
   return (
     <label className="inline-flex items-center gap-2 cursor-pointer">
       <button
         type="button"
         role="switch"
-        {...switchProps}
-        onClick={onChange}
+        aria-checked={checked}
+        aria-label={label ?? "Toggle setting"}
         onClick={onChange}
         className={[
           "relative inline-flex items-center w-11 h-6 rounded-full border transition-colors duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/50 cursor-pointer",
@@ -36,9 +31,7 @@ export function ToggleSwitch({ checked, onChange, label }: ToggleSwitchProps) {
             "inline-block w-4 h-4 rounded-full shadow-sm",
             checked ? "bg-emerald-400" : "bg-zinc-500",
           ].join(" ")}
-          style={{
-            x: checked ? 22 : 4,
-          }}
+          animate={{ x: checked ? 22 : 4 }}
         />
       </button>
       {label && (

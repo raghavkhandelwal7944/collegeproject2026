@@ -1,6 +1,6 @@
 @import "tailwindcss";
 
-@theme {
+:root {
   /* ── Palette tokens ────────────────────────── */
   --color-safe:          #10b981;   /* emerald-500  — cleared  */
   --color-safe-dim:      #065f46;   /* emerald-900  — bg tint  */

@@ -1,7 +1,6 @@
 ﻿"use client";
 
 import {
-    getChatHistory,
     getChatSessions,
     getSessionMessages,
     sendChat,
@@ -21,12 +20,25 @@ import {
 
 // â”€â”€ Security score heuristics â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 const RISK_PATTERNS: [RegExp, number][] = [
+  // Prompt injection / jailbreak
   [/ignore (all |previous |prior )?instructions?/i, 35],
   [/jailbreak|DAN mode|act as if/i, 35],
+  // Code execution / SQL injection
   [/\bexec\b|\bos\.system\b|subprocess|shell=/i, 25],
   [/drop table|delete from|truncate/i, 25],
+  // Hacking / exploitation intent
+  [/\bhack\b|\bcrack\b|\bexploit\b|\bbypass\b|\bbrute.?force\b/i, 30],
+  [/how to (hack|break into|access|get into|steal|phish)/i, 35],
+  [/unauthorized access|gain access to (someone|another|their)/i, 30],
+  // Credential / secret leakage
   [/\bpassword\b|\btoken\b|\bapi.?key\b/i, 15],
-  [/@[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}/i, 10],
+  [/\bleak\b|\bsteal\b|\bdump\b|\bexfiltrat/i, 25],
+  [/my (password|credentials?|secret) is\b/i, 25],
+  // Social media / account takeover
+  [/\binstagram\b|\bfacebook\b|\btwitter\b|\bsnapchat\b|\btiktok\b/i, 10],
+  [/(hack|access|take over|get into).{0,30}(account|profile|instagram|facebook)/i, 35],
+  // PII patterns
+  [/[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}/i, 10],
   [/\b\d{3}[-.]?\d{3}[-.]?\d{4}\b/, 10],
   [/\b\d{3}-\d{2}-\d{4}\b/, 20],
 ];
@@ -139,22 +151,12 @@ export function PlaygroundChat() {
   const scoreTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
-  // Seed chat history from MongoDB once per app session
+  // Do not auto-load all old messages on first open.
+  // A brand-new chat should start empty; only explicitly opened sessions
+  // should load prior history.
   useEffect(() => {
     if (chatStore.isSeeded()) return;
-    getChatHistory()
-      .then((turns) => {
-        if (turns.length === 0) { chatStore.markSeeded(); return; }
-        const hydrated: ChatMessage[] = turns
-          .slice().reverse()
-          .flatMap((t) => [
-            { role: "user" as const, content: t.user_message },
-            { role: "assistant" as const, content: t.bot_response },
-          ]);
-        chatStore.push(...hydrated);
-        chatStore.markSeeded();
-      })
-      .catch(() => chatStore.markSeeded());
+    chatStore.markSeeded();
   }, []);
 
   // Load/refresh sessions list

@@ -45,6 +45,11 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1", tags=["chat"])
 
 
+def _storage_safe_prompt(raw_prompt: str, anonymized_prompt: str, aggressive_pii: bool) -> str:
+    """Return the prompt variant safe to persist in logs/storage."""
+    return anonymized_prompt if aggressive_pii else raw_prompt
+
+
 @router.post(
     "/chat",
     response_model=ChatResponse,
@@ -82,6 +87,28 @@ async def chat(
 
     # Load this user's policy flags from MySQL
     policies = get_user_policies(username)
+    result = ScanResult(anonymized_text=raw_prompt, entities=[], duration_ms=0.0)
+    storage_prompt: str = raw_prompt
+    model_prompt: str = raw_prompt
+
+    # Policy: Aggressive PII Redaction — pre-scan once so any DB/log persistence
+    # uses the anonymized prompt instead of raw secrets.
+    if policies["aggressive_pii"]:
+        logger.debug("[Chat] Pre-scanning prompt for storage-safe persistence for user '%s'…", username)
+        try:
+            result = get_presidio_service().scan(raw_prompt, aggressive=True)
+            storage_prompt = _storage_safe_prompt(
+                raw_prompt,
+                result.anonymized_text,
+                aggressive_pii=True,
+            )
+            model_prompt = result.anonymized_text
+        except RuntimeError as exc:
+            logger.critical("[Chat] PresidioService unavailable during pre-scan: %s", exc)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Firewall scanning service is unavailable. Please retry.",
+            )
 
     # Policy: Code Execution Block — checked before any expensive pipeline step
     if policies["code_block"]:
@@ -93,7 +120,7 @@ async def chat(
         )
         if _CODE_PAT.search(raw_prompt):
             logger.warning("[Chat] BLOCKED by code_block policy for user '%s'.", username)
-            log_request(raw_prompt, blocked=True, violation_type="CodeBlock")
+            log_request(storage_prompt, blocked=True, violation_type="CodeBlock")
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Security policy violation: code execution or destructive commands are not allowed.",
@@ -111,26 +138,24 @@ async def chat(
             username,
             raw_prompt,
         )
-        log_request(raw_prompt, blocked=True, violation_type="Injection")
+        log_request(storage_prompt, blocked=True, violation_type="Injection")
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Security violation: malicious or injection-style content detected.",
         )
 
     # ------------------------------------------------------------------
-    # Gate 2: Presidio Layer 1 PII scan & anonymization
+    # Gate 2: PII scan & anonymization (only when policy is enabled)
     # ------------------------------------------------------------------
-    logger.debug("[Chat] Running Presidio PII scan for user '%s'…", username)
-    try:
-        result: ScanResult = get_presidio_service().scan(raw_prompt)
-    except RuntimeError as exc:
-        # Presidio service not initialized — should never happen in prod but
-        # we surface a clear 500 rather than a cryptic AttributeError.
-        logger.critical("[Chat] PresidioService unavailable: %s", exc)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Firewall scanning service is unavailable. Please retry.",
+    if policies["aggressive_pii"]:
+        storage_prompt = _storage_safe_prompt(
+            raw_prompt,
+            result.anonymized_text,
+            aggressive_pii=True,
         )
+        model_prompt = result.anonymized_text
+    else:
+        logger.debug("[Chat] PII policy disabled for user '%s' — skipping prompt redaction.", username)
 
     # Determine violation type for the audit log
     violation_type: str = "PII" if result.entities else "None"
@@ -161,7 +186,7 @@ async def chat(
     vault_id: str = uuid.uuid4().hex
     redis_svc = get_redis_service()
 
-    if redis_svc and result.entities:
+    if redis_svc and policies["aggressive_pii"] and result.entities:
         token_map = {e.token: e.original_text for e in result.entities}
         await redis_svc.store_vault(vault_id, token_map)
         logger.debug(
@@ -173,10 +198,11 @@ async def chat(
     # ------------------------------------------------------------------
     # Phase 3b — Semantic Cache: check for a similar prior response
     # ------------------------------------------------------------------
-    embedding: list[float] = get_embedding_service().embed(result.anonymized_text)
+    embedding: list[float] | None = None
     cached_response: str | None = None
 
     if redis_svc and policies["semantic_cache"]:
+        embedding = get_embedding_service().embed(model_prompt)
         cached_response = await redis_svc.get_cached_response(embedding)
 
     if cached_response is not None:
@@ -187,14 +213,14 @@ async def chat(
         )
         final_response = (
             await redis_svc.restore_tokens(vault_id, cached_response)
-            if redis_svc
+            if redis_svc and policies["aggressive_pii"]
             else cached_response
         )
-        log_request(raw_prompt, blocked=False, violation_type=violation_type)
+        log_request(storage_prompt, blocked=False, violation_type=violation_type)
         # Determine session title (re-use existing if session already has messages)
         _existing = get_conversation_history(username, limit=1, session_id=chat_session_id)
-        _title = None if _existing else generate_session_title(raw_prompt)
-        save_conversation(username, raw_prompt, cached_response,
+        _title = None if _existing else generate_session_title(storage_prompt)
+        save_conversation(username, storage_prompt, cached_response,
                           session_id=chat_session_id, session_title=_title)
         return ChatResponse(
             anonymized_prompt=result.anonymized_text,
@@ -215,7 +241,7 @@ async def chat(
     logger.debug("[Chat] Running Llama Guard gatekeeper for user '%s'…", username)
     try:
         gatekeeper_result: GatekeeperResult = (
-            await get_llm_service().check_with_gatekeeper(result.anonymized_text)
+            await get_llm_service().check_with_gatekeeper(model_prompt)
         )
     except RuntimeError as exc:
         logger.critical("[Chat] LLMService unavailable: %s", exc)
@@ -232,10 +258,10 @@ async def chat(
             "Category: %s. Prompt (truncated): %.80s",
             username,
             gatekeeper_result.category,
-            result.anonymized_text,
+            model_prompt,
         )
         log_request(
-            raw_prompt,
+            storage_prompt,
             blocked=True,
             violation_type=f"GatekeeperBlock:{gatekeeper_result.category or 'UNKNOWN'}",
         )
@@ -250,9 +276,9 @@ async def chat(
     # ------------------------------------------------------------------
     # Layer 3: Main instruction LLM
     # ------------------------------------------------------------------
-    # Load per-user conversation history from MongoDB (last 20 turns)
-    # so Mistral has full context for multi-turn replies.
-    history = get_conversation_history(username, limit=20)
+    # Load per-session conversation history from MongoDB (last 20 turns)
+    # so a brand-new chat starts clean while old chats preserve their own context.
+    history = get_conversation_history(username, limit=20, session_id=chat_session_id)
 
     # Also prepend any history the client sent in this request
     # (frontend in-memory turns not yet persisted to MongoDB)
@@ -261,13 +287,13 @@ async def chat(
 
     logger.debug("[Chat] Forwarding to main LLM for user '%s' with %d history turns…", username, len(combined_history))
     llm_response: str = await get_llm_service().call_main_llm(
-        result.anonymized_text, history=combined_history
+        model_prompt, history=combined_history
     )
 
     # ------------------------------------------------------------------
     # Phase 3c — Cache store: persist embedding + response for future hits
     # ------------------------------------------------------------------
-    if redis_svc and policies["semantic_cache"]:
+    if redis_svc and policies["semantic_cache"] and embedding is not None:
         await redis_svc.store_cache_entry(embedding, llm_response)
 
     # ------------------------------------------------------------------
@@ -275,7 +301,7 @@ async def chat(
     # ------------------------------------------------------------------
     final_response: str = (
         await redis_svc.restore_tokens(vault_id, llm_response)
-        if redis_svc
+        if redis_svc and policies["aggressive_pii"]
         else llm_response
     )
     if final_response != llm_response:
@@ -295,14 +321,14 @@ async def chat(
     # Persist conversation to MongoDB (with session tracking)
     # ------------------------------------------------------------------
     _existing2 = get_conversation_history(username, limit=1, session_id=chat_session_id)
-    _title2 = None if _existing2 else generate_session_title(raw_prompt)
-    save_conversation(username, raw_prompt, llm_response,
+    _title2 = None if _existing2 else generate_session_title(storage_prompt)
+    save_conversation(username, storage_prompt, llm_response,
                       session_id=chat_session_id, session_title=_title2)
 
     # ------------------------------------------------------------------
     # Audit log — record the completed, allowed request
     # ------------------------------------------------------------------
-    log_request(raw_prompt, blocked=False, violation_type=violation_type)
+    log_request(storage_prompt, blocked=False, violation_type=violation_type)
 
     return ChatResponse(
         anonymized_prompt=result.anonymized_text,
